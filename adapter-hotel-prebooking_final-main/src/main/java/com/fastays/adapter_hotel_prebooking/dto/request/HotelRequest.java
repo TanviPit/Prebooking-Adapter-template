@@ -10,7 +10,7 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 public class HotelRequest {
     @JsonProperty("BookingCode")
-    private String BookingCode;
+    private String bookingCode;
     @JsonProperty("PaymentMode")
-    private String PaymentMode;
+    private String paymentMode;
 }

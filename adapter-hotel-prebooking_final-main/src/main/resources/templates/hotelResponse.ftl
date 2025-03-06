@@ -26,7 +26,7 @@
                 "taxesAndOtherCharges": ${room.totalTax?default(0)},
                 "totalAmount": ${room.totalFare?default(0)},
                 "name": [<#list room.name as name>"${name}"<#if name_has_next>,</#if></#list>],
-                "bookingCode": "${room.bookingCode!null}",
+                "bookingCode": "${room.bookingCode!null}",a
                 "inclusion": "${room.inclusion!null}",
                 "dayRates": [
                 <#if (room.dayRates)??>

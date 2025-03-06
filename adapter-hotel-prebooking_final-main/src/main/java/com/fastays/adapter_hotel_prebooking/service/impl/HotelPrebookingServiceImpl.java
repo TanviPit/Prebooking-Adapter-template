@@ -1,14 +1,12 @@
 package com.fastays.adapter_hotel_prebooking.service.impl;
 
+import com.fastays.adapter_hotel_prebooking.constants.HotelPrebookingConstants;
 import com.fastays.adapter_hotel_prebooking.dto.request.HotelRequest;
-import com.fastays.adapter_hotel_prebooking.dto.response.responeTboClasses.HotelResult;
-import com.fastays.adapter_hotel_prebooking.dto.response.responeTboClasses.Room;
-import com.fastays.adapter_hotel_prebooking.dto.response.responeTboClasses.Status;
+import com.fastays.adapter_hotel_prebooking.dto.response.responeTboClasses.*;
 import com.fastays.adapter_hotel_prebooking.dto.response.responseMngoClass.HotelBookingResponseMngo;
-import com.fastays.adapter_hotel_prebooking.dto.response.responeTboClasses.HotelResponseTbo;
+import com.fastays.adapter_hotel_prebooking.exceptions.ResourceNotFoundException;
 import com.fastays.adapter_hotel_prebooking.repository.MongoDbRepository;
 import com.fastays.adapter_hotel_prebooking.service.interfaces.HotelPrebookingService;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import freemarker.template.Configuration;
 import freemarker.template.Template;
 import lombok.RequiredArgsConstructor;
@@ -47,8 +45,10 @@ public class HotelPrebookingServiceImpl implements HotelPrebookingService {
             headers.setBasicAuth(apiUserName, apiSecret);
             HttpEntity<HotelRequest> requestEntity = new HttpEntity<>(hotelRequest, headers);
 
-            // Corrected URL
-            ResponseEntity<HotelResponseTbo> response = restTemplate.exchange(apiUrl, HttpMethod.POST, requestEntity, HotelResponseTbo.class);
+            // API Call
+            ResponseEntity<HotelResponseTbo> response =
+                    restTemplate.exchange(apiUrl, HttpMethod.POST,requestEntity, HotelResponseTbo.class);
+
             if (response.getStatusCode() == HttpStatus.OK && response.getBody() != null) {
                 HotelResponseTbo hotelResponseTbo = response.getBody();
                 HotelBookingResponseMngo fetchedHotels = null;
@@ -57,15 +57,18 @@ public class HotelPrebookingServiceImpl implements HotelPrebookingService {
                 }
                 String mappedFTL = maptoFtl(hotelResponseTbo, fetchedHotels);
                 return ResponseEntity.ok(mappedFTL);
-
             } else {
-                log.error("Failed to book hotel. Status: {}", response.getStatusCode());
-                return ResponseEntity.status(response.getStatusCode()).body("Booking failed: " + response.getStatusCode().toString());
+                log.info("Failed to book hotel. Status: {}", response.getStatusCode());
+                return ResponseEntity.status(response.getStatusCode())
+                        .body("Booking failed: " + response.getStatusCode().toString());
             }
-
+        } catch (ResourceNotFoundException e) {
+            log.error("Resource not found: {}", e.getMessage());
+            throw new ResourceNotFoundException("Resource not found: " + e.getMessage());
         } catch (Exception e) {
-            log.error("Error during hotel booking: ", e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("Error processing hotel booking: " + e.getMessage());
+            log.error("Unexpected error occurred: {}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("An unexpected error occurred: " + e.getMessage());
         }
     }
 
@@ -74,61 +77,48 @@ public class HotelPrebookingServiceImpl implements HotelPrebookingService {
         String bookingCode = null;
 
         List<HotelResult> hotelResults = hotelResponseTbo.getHotelResult();
-        for (HotelResult rsult : hotelResults) {
-            List<Room> roomslist = rsult.getRooms();
+        for (HotelResult result : hotelResults) {
+            List<Room> roomslist = result.getRooms();
             for (Room room : roomslist) {
                 bookingCode = room.getBookingCode();
             }
         }
-        Optional<HotelBookingResponseMngo> result = mongoDbRepository.findByBookingCode(bookingCode);
-        if (result.isPresent()) {
-            hotelBookingResponseMngo = result.get();
-            return hotelBookingResponseMngo;
-        } else {
-            log.info(" Data not present in the MongoDb with provided Booking ID");
-            return null;
+
+        if (bookingCode == null || bookingCode.isEmpty()) {
+            throw new ResourceNotFoundException("Booking code is missing from hotel response.");
         }
 
+        Optional<HotelBookingResponseMngo> result = mongoDbRepository.findByBookingCode(bookingCode);
+
+        if (result.isPresent()) {
+            hotelBookingResponseMngo = result.get();
+
+
+        } else {
+            log.info("Data not present in the MongoDB with provided Booking ID");
+          //  throw new ResourceNotFoundException("Hotel booking data not found in MongoDB for booking code: " + bookingCode);
+
+        }
+        return hotelBookingResponseMngo;
     }
 
     public String maptoFtl(HotelResponseTbo hotelResponseTbo, HotelBookingResponseMngo hotelBookingResponseMngo) {
-
         if (hotelResponseTbo.getHotelResult() != null || hotelBookingResponseMngo != null) {
             try {
                 Map<String, Object> mapped = new HashMap<>();
+                mapped.put(HotelPrebookingConstants.RESULTS_TBO, hotelResponseTbo);
+                mapped.put(HotelPrebookingConstants.RESULTS_MNGO, hotelBookingResponseMngo);
 
-                mapped.put("resultsTbo", hotelResponseTbo);
-                mapped.put("resultsMngo", hotelBookingResponseMngo);
-                //mapped (both responses are present in the name ogf string)
 
                 Template template = freemarkerConfiguration.getTemplate("hotelResponse.ftl");
                 return FreeMarkerTemplateUtils.processTemplateIntoString(template, mapped);
             } catch (Exception e) {
-                throw new RuntimeException(e);
+                throw new RuntimeException("Error processing FreeMarker template: " + e.getMessage(), e);
             }
-        } else if (hotelResponseTbo.getStatus() != null) {
-            Status sts = hotelResponseTbo.getStatus();
-
-            try {
-                Map<String, Object> errorMap = new HashMap<>();
-                errorMap.put("Sting Code", sts.getCode());
-                errorMap.put("Description", sts.getDescription());
-
-                Map<String, Object> statusMap = new HashMap<>();
-                statusMap.put("Status", errorMap); // Fix: store errorMap, not statusMap itself
-
-                ObjectMapper objectMapper = new ObjectMapper();
-                return objectMapper.writerWithDefaultPrettyPrinter().writeValueAsString(statusMap);
-            } catch (Exception e) {
-                throw new RuntimeException(e);
-            }
-        } else {
-            log.info("Not Mapping TO FTL");
-            return null;
-
+        } else if (hotelResponseTbo.getHotelResult() == null) {
+            throw new ResourceNotFoundException("Hotel response status is available, but no hotel results found.");
         }
-
+        log.info("Not Mapping TO FTL");
+        throw new ResourceNotFoundException("Hotel booking response mapping failed");
     }
-
 }
-
